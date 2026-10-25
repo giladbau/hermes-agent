@@ -1,0 +1,65 @@
+name: Windows Light personal build
+on:
+  push:
+    branches: [ci/windows-light-b247d791]
+    paths: ['.github/workflows/windows-light-personal.yml', 'scripts/ci/windows-light-smoke.mjs']
+permissions:
+  contents: read
+concurrency:
+  group: windows-light-personal
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 55
+    env:
+      PYTHONUTF8: '1'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: b247d791662e67e5f1215eef1fde3798261761d5
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build pinned light MSIX using official driver
+        shell: pwsh
+        run: |
+          git -C source status --porcelain
+          python source/scripts/bundles/desktop.py --repo "$pwd/source" --commit b247d791662e67e5f1215eef1fde3798261761d5 --variant light --work D:/hlw --cache D:/hlc -- --publish never
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Launch packaged Windows app and verify light contents
+        shell: pwsh
+        run: |
+          node harness/scripts/ci/windows-light-smoke.mjs "$pwd/source" "$pwd/deliverables"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Archive unsigned client and checksums
+        shell: pwsh
+        run: |
+          $app = Get-ChildItem source/apps/desktop/release -Directory -Filter '*unpacked*' | Select-Object -First 1
+          if (!$app) { throw 'Missing unpacked application' }
+          Compress-Archive -Path "$($app.FullName)/*" -DestinationPath deliverables/Hermes-Light-Windows-x64-portable.zip
+          Copy-Item source/apps/desktop/release/*.msix deliverables/
+          Get-ChildItem deliverables -File | Where-Object Name -ne SHA256SUMS.txt | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content deliverables/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hermes-Light-Windows-x64-b247d791
+          path: deliverables/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: Windows-Light-diagnostics
+          path: |
+            deliverables/windows-launch.png
+            deliverables/launch-text.txt
+            deliverables/package-files.txt
+          if-no-files-found: ignore
+          retention-days: 7
